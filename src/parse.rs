@@ -41,7 +41,7 @@ pub fn checksum<'a, I: Iterator<Item = &'a u8>>(bytes: I) -> u8 {
 }
 
 fn construct_sentence<'a>(data: (&'a [u8], &'a [u8], &'a [u8], u8))
-                          -> std::result::Result<NmeaSentence<'a>, &'static str> {
+                          -> core::result::Result<NmeaSentence<'a>, &'static str> {
     Ok(NmeaSentence {
            talker_id: data.0,
            message_id: data.1,
@@ -50,7 +50,7 @@ fn construct_sentence<'a>(data: (&'a [u8], &'a [u8], &'a [u8], u8))
        })
 }
 
-fn parse_hex(data: &[u8]) -> std::result::Result<u8, &'static str> {
+fn parse_hex(data: &[u8]) -> core::result::Result<u8, &'static str> {
     u8::from_str_radix(unsafe { str::from_utf8_unchecked(data) }, 16)
         .map_err(|_| "Failed to parse checksum as hex number")
 }
@@ -75,7 +75,7 @@ named!(do_parse_nmea_sentence<NmeaSentence>,
        )
 );
 
-pub fn parse_nmea_sentence(sentence: &[u8]) -> std::result::Result<NmeaSentence, String> {
+pub fn parse_nmea_sentence(sentence: &[u8]) -> core::result::Result<NmeaSentence, String> {
     /*
      * From gpsd:
      * We've had reports that on the Garmin GPS-10 the device sometimes
@@ -104,12 +104,12 @@ pub fn parse_nmea_sentence(sentence: &[u8]) -> std::result::Result<NmeaSentence,
     Ok(res)
 }
 
-fn parse_num<I: std::str::FromStr>(data: &[u8]) -> std::result::Result<I, &'static str> {
+fn parse_num<I: core::str::FromStr>(data: &[u8]) -> core::result::Result<I, &'static str> {
     str::parse::<I>(unsafe { str::from_utf8_unchecked(data) }).map_err(|_| "parse of number failed")
 }
 
 fn construct_satellite(data: (u32, Option<i32>, Option<i32>, Option<i32>))
-                       -> std::result::Result<Satellite, &'static str> {
+                       -> core::result::Result<Satellite, &'static str> {
     Ok(Satellite {
            gnss_type: GnssType::Galileo,
            prn: data.0,
@@ -142,7 +142,7 @@ fn construct_gsv_data(data: (u16,
                              Option<Satellite>,
                              Option<Satellite>,
                              Option<Satellite>))
-                      -> std::result::Result<GsvData, &'static str> {
+                      -> core::result::Result<GsvData, &'static str> {
     Ok(GsvData {
            gnss_type: GnssType::Galileo,
            number_of_sentences: data.0,
@@ -226,7 +226,7 @@ pub struct GgaData {
     pub geoid_height: Option<f32>,
 }
 
-fn parse_float_num<T: str::FromStr>(input: &[u8]) -> std::result::Result<T, &'static str> {
+fn parse_float_num<T: str::FromStr>(input: &[u8]) -> core::result::Result<T, &'static str> {
     let s = str::from_utf8(input).map_err(|_| "invalid float number")?;
     str::parse::<T>(s).map_err(|_| "parse of float number failed")
 }
@@ -272,7 +272,7 @@ named!(do_parse_lat_lon<(f64, f64)>,
                lon_dir: one_of!("EW") >>
                (lat_deg, lat_min, lat_dir, lon_deg, lon_min, lon_dir)
            ),
-           |data: (u8, f64, char, u8, f64, char)| -> std::result::Result<(f64, f64), &'static str> {
+           |data: (u8, f64, char, u8, f64, char)| -> core::result::Result<(f64, f64), &'static str> {
                let mut lat = (data.0 as f64) + data.1 / 60.;
                if data.2 == 'S' {
                    lat = -lat;
@@ -317,7 +317,7 @@ named!(do_parse_gga<GgaData>,
                (time, lat_lon, fix_quality, tracked_sats, hdop, altitude, geoid_height)),
            |data: (Option<NaiveTime>, Option<(f64, f64)>, char, Option<u32>,
                    Option<f32>, Option<f32>, Option<f32>)|
-                   -> std::result::Result<GgaData, &'static str> {
+                   -> core::result::Result<GgaData, &'static str> {
                Ok(GgaData {
                    fix_time: data.0,
                    fix_type: Some(FixType::from(data.2)),
