@@ -10,7 +10,6 @@ keywords = ["NMEA", "gps", "glonass", "coordinate", "position", "no_std"]
 
 [dependencies]
 nom = { version = "4.0", default-features = false, features = ["alloc"] }
-hashmap_core = "0.1"
 
 [dev-dependencies]
 quickcheck = "0.4"
