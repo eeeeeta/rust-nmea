@@ -1,12 +1,9 @@
-[NMEA][doc]
-===========
+[NMEA][doc] (slimline)
+=====================
 
-[![Version](https://img.shields.io/crates/v/nmea.svg)](https://crates.io/crates/nmea)
-[![Build Status](https://travis-ci.org/Dushistov/rust-nmea.png)](https://travis-ci.org/Dushistov/rust-nmea)
-[![Build status](https://ci.appveyor.com/api/projects/status/u5p772sy1l4k90oq?svg=true)](https://ci.appveyor.com/project/Dushistov/rust-nmea)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/Dushistov/rust-nmea/blob/master/LICENSE.txt)
 
-NMEA 0183 sentence parser for Rust. 
+NMEA 0183 sentence parser for Rust, slimmed down to work under `#![no_std]`. 
 
 Currently only _GGA_,_GSV_, _GSA_, _VTG_ and _RMC_ sentences are supported. Feel free to add others.
 
