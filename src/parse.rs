@@ -9,7 +9,6 @@ use nom::{digit, IResult, AsChar, Err};
 use GnssType;
 use Satellite;
 use FixType;
-use SentenceType;
 
 pub struct NmeaSentence<'a> {
     pub talker_id: &'a [u8],
@@ -99,7 +98,7 @@ pub fn parse_nmea_sentence(sentence: &[u8]) -> core::result::Result<NmeaSentence
         .map(|(_, o)| o)
         .map_err(|err| match err {
                      Err::Incomplete(_) => "Incomplete nmea sentence".to_string(),
-                     Err::Error(e) | Err::Failure(e) => format!("{:?}", e),
+                     _ => "nom error".to_string(),
                  })?;
     Ok(res)
 }
@@ -205,7 +204,7 @@ pub fn parse_gsv(sentence: &NmeaSentence) -> Result<GsvData, String> {
         .map(|(_, o)| o)
         .map_err(|err| match err {
                      Err::Incomplete(_) => "Incomplete nmea sentence".to_string(),
-                     Err::Error(e) | Err::Failure(e) => format!("{:?}", e),
+                     _ => "nom error".to_string(),
                  })?;
     res.gnss_type = gnss_type.clone();
     for sat in res.sats_info.iter_mut() {
@@ -356,7 +355,7 @@ pub fn parse_gga(sentence: &NmeaSentence) -> Result<GgaData, String> {
         .map(|(_, o)| o)
         .map_err(|err| match err {
                      Err::Incomplete(_) => "Incomplete nmea sentence".to_string(),
-                     Err::Error(e) | Err::Failure(e) => format!("{:?}", e),
+                     _ => "nom error".to_string(),
                  })?;
     Ok(res)
 }
@@ -461,7 +460,7 @@ pub fn parse_rmc(sentence: &NmeaSentence) -> Result<RmcData, String> {
         .map(|(_, o)| o)
         .map_err(|err| match err {
                      Err::Incomplete(_) => "Incomplete nmea sentence".to_string(),
-                     Err::Error(e) | Err::Failure(e) => format!("{:?}", e),
+                     _ => "nom error".to_string(),
                  })
 }
 
@@ -597,7 +596,7 @@ fn parse_gsa(s: &NmeaSentence) -> Result<GsaData, String> {
         .map(|(_, o)| o)
         .map_err(|err| match err {
                      Err::Incomplete(_) => "Incomplete nmea sentence".to_string(),
-                     Err::Error(e) | Err::Failure(e) => format!("{:?}", e),
+                     _ => "nom error".to_string(),
                  })?;
     Ok(ret)
 }
@@ -723,20 +722,19 @@ fn parse_vtg(s: &NmeaSentence) -> Result<VtgData, String> {
         .map(|(_, o)| o)
         .map_err(|err| match err {
                      Err::Incomplete(_) => "Incomplete nmea sentence".to_string(),
-                     Err::Error(e) | Err::Failure(e) => format!("{:?}", e),
+                     _ => "nom error".to_string(),
                  })?;
     Ok(ret)
 }
 
 
 
-pub enum ParseResult {
+pub enum ParseResult<'a> {
     GGA(GgaData),
     RMC(RmcData),
-    GSV(GsvData),
     GSA(GsaData),
     VTG(VtgData),
-    Unsupported(SentenceType),
+    Unsupported(&'a [u8]),
 }
 
 /// parse nmea 0183 sentence and extract data from it
@@ -744,22 +742,20 @@ pub fn parse(xs: &[u8]) -> Result<ParseResult, String> {
     let nmea_sentence = parse_nmea_sentence(xs)?;
 
     if nmea_sentence.checksum == nmea_sentence.calc_checksum() {
-        match SentenceType::try_from(nmea_sentence.message_id)? {
-            SentenceType::GGA => {
+        match &nmea_sentence.message_id {
+            x if x == b"GGA" => {
                 let data = parse_gga(&nmea_sentence)?;
                 Ok(ParseResult::GGA(data))
-            }
-            SentenceType::GSV => {
-                let data = parse_gsv(&nmea_sentence)?;
-                Ok(ParseResult::GSV(data))
-            }
-            SentenceType::RMC => {
+            },
+            x if x == b"RMC" => {
                 let data = parse_rmc(&nmea_sentence)?;
                 Ok(ParseResult::RMC(data))
             }
-            SentenceType::GSA => Ok(ParseResult::GSA(parse_gsa(&nmea_sentence)?)),
-            SentenceType::VTG => Ok(ParseResult::VTG(parse_vtg(&nmea_sentence)?)),
-            msg_id => Ok(ParseResult::Unsupported(msg_id)),
+            x if x == b"GSA" => Ok(ParseResult::GSA(parse_gsa(&nmea_sentence)?)),
+            x if x == b"VTG" => Ok(ParseResult::VTG(parse_vtg(&nmea_sentence)?)),
+            x => {
+                Ok(ParseResult::Unsupported(x))
+            }
         }
     } else {
         Err("Checksum mismatch".into())
