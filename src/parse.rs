@@ -1,6 +1,5 @@
 use core::str;
 use alloc::vec::Vec;
-use alloc::prelude::*;
 
 use time::{NaiveDate, NaiveTime};
 use nom;
@@ -10,6 +9,22 @@ use GnssType;
 use Satellite;
 use FixType;
 
+pub type Result<T> = core::result::Result<T, ParseError>;
+
+#[derive(Copy, Clone, Debug)]
+#[repr(u8)]
+pub enum ParseError {
+    TooLongMessage,
+    Incomplete,
+    Nom,
+    UnknownGnss,
+    InvalidMessageId,
+    ChecksumFail,
+    NumberFail,
+    InvalidTime,
+    InvalidDate,
+    InvalidFixStatus
+}
 pub struct NmeaSentence<'a> {
     pub talker_id: &'a [u8],
     pub message_id: &'a [u8],
@@ -39,19 +54,18 @@ pub fn checksum<'a, I: Iterator<Item = &'a u8>>(bytes: I) -> u8 {
     bytes.fold(0, |c, x| c ^ *x)
 }
 
-fn construct_sentence<'a>(data: (&'a [u8], &'a [u8], &'a [u8], u8))
-                          -> core::result::Result<NmeaSentence<'a>, &'static str> {
+fn construct_sentence<'a>(data: (&'a [u8], &'a [u8], &'a [u8], u8)) -> Result<NmeaSentence<'a>> {
     Ok(NmeaSentence {
-           talker_id: data.0,
-           message_id: data.1,
-           data: data.2,
-           checksum: data.3,
-       })
+        talker_id: data.0,
+        message_id: data.1,
+        data: data.2,
+        checksum: data.3,
+    })
 }
 
-fn parse_hex(data: &[u8]) -> core::result::Result<u8, &'static str> {
+fn parse_hex(data: &[u8]) -> Result<u8> {
     u8::from_str_radix(unsafe { str::from_utf8_unchecked(data) }, 16)
-        .map_err(|_| "Failed to parse checksum as hex number")
+        .map_err(|_| ParseError::NumberFail)
 }
 
 named!(parse_checksum<u8>, map_res!(
@@ -74,7 +88,7 @@ named!(do_parse_nmea_sentence<NmeaSentence>,
        )
 );
 
-pub fn parse_nmea_sentence(sentence: &[u8]) -> core::result::Result<NmeaSentence, String> {
+pub fn parse_nmea_sentence(sentence: &[u8]) -> Result<NmeaSentence> {
     /*
      * From gpsd:
      * We've had reports that on the Garmin GPS-10 the device sometimes
@@ -92,23 +106,23 @@ pub fn parse_nmea_sentence(sentence: &[u8]) -> core::result::Result<NmeaSentence
      * a 100-character PSTI message.
      */
     if sentence.len() > 102 {
-        return Err("Too long message".to_string());
+        Err(ParseError::TooLongMessage)?
     }
     let res: NmeaSentence = do_parse_nmea_sentence(sentence)
         .map(|(_, o)| o)
         .map_err(|err| match err {
-                     Err::Incomplete(_) => "Incomplete nmea sentence".to_string(),
-                     _ => "nom error".to_string(),
+                     Err::Incomplete(_) => ParseError::Incomplete,
+                     _ => ParseError::Nom,
                  })?;
     Ok(res)
 }
 
-fn parse_num<I: core::str::FromStr>(data: &[u8]) -> core::result::Result<I, &'static str> {
-    str::parse::<I>(unsafe { str::from_utf8_unchecked(data) }).map_err(|_| "parse of number failed")
+fn parse_num<I: core::str::FromStr>(data: &[u8]) -> Result<I> {
+    str::parse::<I>(unsafe { str::from_utf8_unchecked(data) }).map_err(|_| ParseError::NumberFail)
 }
 
 fn construct_satellite(data: (u32, Option<i32>, Option<i32>, Option<i32>))
-                       -> core::result::Result<Satellite, &'static str> {
+                       -> Result<Satellite> {
     Ok(Satellite {
            gnss_type: GnssType::Galileo,
            prn: data.0,
@@ -141,7 +155,7 @@ fn construct_gsv_data(data: (u16,
                              Option<Satellite>,
                              Option<Satellite>,
                              Option<Satellite>))
-                      -> core::result::Result<GsvData, &'static str> {
+                      -> Result<GsvData> {
     Ok(GsvData {
            gnss_type: GnssType::Galileo,
            number_of_sentences: data.0,
@@ -191,20 +205,20 @@ named!(do_parse_gsv<GsvData>,
 /// GL may be (incorrectly) used when GSVs are mixed containing
 /// GLONASS, GN may be (incorrectly) used when GSVs contain GLONASS
 /// only.  Usage is inconsistent.
-pub fn parse_gsv(sentence: &NmeaSentence) -> Result<GsvData, String> {
+pub fn parse_gsv(sentence: &NmeaSentence) -> Result<GsvData> {
     if sentence.message_id != b"GSV" {
-        return Err("GSV sentence not starts with $..GSV".into());
+        Err(ParseError::InvalidMessageId)?
     }
     let gnss_type = match sentence.talker_id {
         b"GP" => GnssType::Gps,
         b"GL" => GnssType::Glonass,
-        _ => return Err("Unknown GNSS type in GSV sentence".into()),
+        _ => Err(ParseError::UnknownGnss)?
     };
     let mut res: GsvData = do_parse_gsv(sentence.data)
         .map(|(_, o)| o)
         .map_err(|err| match err {
-                     Err::Incomplete(_) => "Incomplete nmea sentence".to_string(),
-                     _ => "nom error".to_string(),
+                     Err::Incomplete(_) => ParseError::Incomplete,
+                     _ => ParseError::Nom,
                  })?;
     res.gnss_type = gnss_type.clone();
     for sat in res.sats_info.iter_mut() {
@@ -225,9 +239,9 @@ pub struct GgaData {
     pub geoid_height: Option<f32>,
 }
 
-fn parse_float_num<T: str::FromStr>(input: &[u8]) -> core::result::Result<T, &'static str> {
-    let s = str::from_utf8(input).map_err(|_| "invalid float number")?;
-    str::parse::<T>(s).map_err(|_| "parse of float number failed")
+fn parse_float_num<T: str::FromStr>(input: &[u8]) -> Result<T> {
+    let s = str::from_utf8(input).map_err(|_| ParseError::NumberFail)?;
+    str::parse::<T>(s).map_err(|_| ParseError::NumberFail)
 }
 
 named!(parse_hms<NaiveTime>,
@@ -238,15 +252,9 @@ named!(parse_hms<NaiveTime>,
                sec: map_res!(take_until!(","), parse_float_num::<f64>) >>
                (hour, min, sec)
            ),
-           |data: (u32, u32, f64)| -> core::result::Result<NaiveTime, &'static str> {
-               if data.2.is_sign_negative() {
-                   return Err("Invalid time: second is negative");
-               }
-               if data.0 >= 24 {
-                   return Err("Invalid time: hour >= 24");
-               }
-               if data.1 >= 60 {
-                   return Err("Invalid time: min >= 60");
+           |data: (u32, u32, f64)| -> Result<NaiveTime> {
+               if data.2.is_sign_negative() || data.0 >= 24 || data.1 >= 60 {
+                   Err(ParseError::InvalidTime)?
                }
                Ok(NaiveTime {
                    hour: data.0,
@@ -271,7 +279,7 @@ named!(do_parse_lat_lon<(f64, f64)>,
                lon_dir: one_of!("EW") >>
                (lat_deg, lat_min, lat_dir, lon_deg, lon_min, lon_dir)
            ),
-           |data: (u8, f64, char, u8, f64, char)| -> core::result::Result<(f64, f64), &'static str> {
+           |data: (u8, f64, char, u8, f64, char)| -> Result<(f64, f64)> {
                let mut lat = (data.0 as f64) + data.1 / 60.;
                if data.2 == 'S' {
                    lat = -lat;
@@ -288,9 +296,9 @@ named!(do_parse_lat_lon<(f64, f64)>,
 named!(parse_lat_lon<Option<(f64, f64)>>,
        alt_complete!(
            map_res!(tag!(",,,"),
-                    |_| -> Result<Option<(f64, f64)>, &'static str> { Ok(None) }) |
+                    |_| -> Result<Option<(f64, f64)>> { Ok(None) }) |
            map_res!(do_parse_lat_lon,
-                    |v| -> Result<Option<(f64, f64)>, &'static str> { Ok(Some(v)) }))
+                    |v| -> Result<Option<(f64, f64)>> { Ok(Some(v)) }))
 );
 
 named!(do_parse_gga<GgaData>,
@@ -316,7 +324,7 @@ named!(do_parse_gga<GgaData>,
                (time, lat_lon, fix_quality, tracked_sats, hdop, altitude, geoid_height)),
            |data: (Option<NaiveTime>, Option<(f64, f64)>, char, Option<u32>,
                    Option<f32>, Option<f32>, Option<f32>)|
-                   -> core::result::Result<GgaData, &'static str> {
+                   -> Result<GgaData> {
                Ok(GgaData {
                    fix_time: data.0,
                    fix_type: Some(FixType::from(data.2)),
@@ -347,15 +355,15 @@ named!(do_parse_gga<GgaData>,
 /// ellipsoid, in Meters
 /// (empty field) time in seconds since last DGPS update
 /// (empty field) DGPS station ID number (0000-1023)
-pub fn parse_gga(sentence: &NmeaSentence) -> Result<GgaData, String> {
+pub fn parse_gga(sentence: &NmeaSentence) -> Result<GgaData> {
     if sentence.message_id != b"GGA" {
-        return Err("GGA sentence not starts with $..GGA".into());
+        Err(ParseError::InvalidMessageId)?
     }
     let res: GgaData = do_parse_gga(sentence.data)
         .map(|(_, o)| o)
         .map_err(|err| match err {
-                     Err::Incomplete(_) => "Incomplete nmea sentence".to_string(),
-                     _ => "nom error".to_string(),
+                     Err::Incomplete(_) => ParseError::Incomplete,
+                     _ => ParseError::Nom,
                  })?;
     Ok(res)
 }
@@ -383,13 +391,10 @@ named!(parse_date<NaiveDate>, map_res!(do_parse!(
                month: map_res!(take!(2), parse_num::<u8>) >>
                year: map_res!(take!(2), parse_num::<u8>) >>
         (day, month, year)),
-    |data: (u8, u8, u8)| -> Result<NaiveDate, &'static str> {
+    |data: (u8, u8, u8)| -> Result<NaiveDate> {
         let (day, month, year) = (data.0 as u32, data.1 as u32, (data.2 as i32));
-        if month < 1 || month > 12 {
-            return Err("Invalid month < 1 or > 12");
-        }
-        if day < 1 || day > 31 {
-            return Err("Invalid day < 1 or > 31");
+        if month < 1 || month > 12 || day < 1 || day > 31 {
+            Err(ParseError::InvalidDate)?
         }
         Ok(NaiveDate { year, month, day })
     })
@@ -415,7 +420,7 @@ named!(do_parse_rmc<RmcData>,
            ),
            |data: (Option<NaiveTime>, char, Option<(f64, f64)>, Option<f32>,
                    Option<f32>, Option<NaiveDate>)|
-                   -> Result<RmcData, &'static str> {
+                   -> Result<RmcData> {
                Ok(RmcData {
                    fix_time: data.0,
                    fix_date: data.5,
@@ -423,7 +428,7 @@ named!(do_parse_rmc<RmcData>,
                        'A' => RmcStatusOfFix::Autonomous,
                        'D' => RmcStatusOfFix::Differential,
                        'V' => RmcStatusOfFix::Invalid,
-                       _ => return Err("do_parse_rmc failed: not A|D|V status of fix"),
+                       _ => Err(ParseError::InvalidFixStatus)?,
                    }),
                    lat: data.2.map(|v| v.0),
                    lon: data.2.map(|v| v.1),
@@ -452,15 +457,15 @@ named!(do_parse_rmc<RmcData>,
 /// *68        mandatory nmea_checksum
 ///
 /// SiRF chipsets don't return either Mode Indicator or magnetic variation.
-pub fn parse_rmc(sentence: &NmeaSentence) -> Result<RmcData, String> {
+pub fn parse_rmc(sentence: &NmeaSentence) -> Result<RmcData> {
     if sentence.message_id != b"RMC" {
-        return Err("RMC message should starts with $..RMC".into());
+        Err(ParseError::InvalidMessageId)?
     }
     do_parse_rmc(sentence.data)
         .map(|(_, o)| o)
         .map_err(|err| match err {
-                     Err::Incomplete(_) => "Incomplete nmea sentence".to_string(),
-                     _ => "nom error".to_string(),
+                     Err::Incomplete(_) => ParseError::Incomplete,
+                     _ => ParseError::Nom,
                  })
 }
 
@@ -491,7 +496,7 @@ pub struct GsaData {
 named!(gsa_prn_fields_parse<&[u8], Vec<Option<u32>>>, many0!(map_res!(do_parse!(
     prn: opt!(map_res!(complete!(digit), parse_num::<u32>)) >>
     char!(',') >> (prn)),
-    |prn: Option<u32>| -> Result<Option<u32>, String> {
+    |prn: Option<u32>| -> Result<Option<u32>> {
         Ok(prn)
     }
 )));
@@ -515,7 +520,7 @@ named!(do_parse_empty_gsa_tail<GsaTail>, map_res!(do_parse!(
     take_while!(is_comma) >>
     eof!() >>
     ()),
-    |_ : ()| -> Result<GsaTail, String> {
+    |_ : ()| -> Result<GsaTail> {
         Ok((Vec::new(), None, None, None))
     }
 ));
@@ -527,7 +532,7 @@ named!(do_parse_gsa<GsaData>, map_res!(do_parse!(
     char!(',') >>
     tail: alt_complete!(do_parse_empty_gsa_tail | do_parse_gsa_tail) >>
     (mode1, mode2, tail)),
-    |mut data:  (char, char, GsaTail)| -> Result<GsaData, String> {
+    |mut data:  (char, char, GsaTail)| -> Result<GsaData> {
         Ok(GsaData {
             mode1: match data.0 {
                 'M' => GsaMode1::Manual,
@@ -588,15 +593,15 @@ named!(do_parse_gsa<GsaData>, map_res!(do_parse!(
 /// in at least two ways: it's got the wrong number of fields, and
 /// it claims to be a valid sentence (A flag) when it isn't.
 /// Alarmingly, it's possible this error may be generic to SiRFstarIII
-fn parse_gsa(s: &NmeaSentence) -> Result<GsaData, String> {
+fn parse_gsa(s: &NmeaSentence) -> Result<GsaData> {
     if s.message_id != b"GSA" {
-        return Err("GSA message should starts with $..GSA".into());
+        Err(ParseError::InvalidMessageId)?
     }
     let ret: GsaData = do_parse_gsa(s.data)
         .map(|(_, o)| o)
         .map_err(|err| match err {
-                     Err::Incomplete(_) => "Incomplete nmea sentence".to_string(),
-                     _ => "nom error".to_string(),
+                     Err::Incomplete(_) => ParseError::Incomplete,
+                     _ => ParseError::Nom,
                  })?;
     Ok(ret)
 }
@@ -671,7 +676,7 @@ named!(do_parse_vtg<VtgData>, map_res!(do_parse!(
     char!(',') >>
     opt!(complete!(char!('K'))) >>
     (true_course, knots_ground_speed, kph_ground_speed)),
-    |data: (Option<f32>, Option<f32>, Option<f32>)| -> Result<VtgData, String> {
+    |data: (Option<f32>, Option<f32>, Option<f32>)| -> Result<VtgData> {
         Ok(VtgData {
             true_course: data.0,
             speed_over_ground: match (data.1, data.2) {
@@ -714,21 +719,20 @@ named!(do_parse_vtg<VtgData>, map_res!(do_parse!(
 /// x.x,M = Track, degrees Magnetic
 /// x.x,N = Speed, knots
 /// x.x,K = Speed, Km/hr
-fn parse_vtg(s: &NmeaSentence) -> Result<VtgData, String> {
+fn parse_vtg(s: &NmeaSentence) -> Result<VtgData> {
     if s.message_id != b"VTG" {
-        return Err("VTG message should starts with $..VTG".into());
+        Err(ParseError::InvalidMessageId)?
     }
     let ret: VtgData = do_parse_vtg(s.data)
         .map(|(_, o)| o)
         .map_err(|err| match err {
-                     Err::Incomplete(_) => "Incomplete nmea sentence".to_string(),
-                     _ => "nom error".to_string(),
+                     Err::Incomplete(_) => ParseError::Incomplete,
+                     _ => ParseError::Nom,
                  })?;
     Ok(ret)
 }
 
-
-
+#[derive(Debug)]
 pub enum ParseResult<'a> {
     GGA(GgaData),
     RMC(RmcData),
@@ -738,7 +742,7 @@ pub enum ParseResult<'a> {
 }
 
 /// parse nmea 0183 sentence and extract data from it
-pub fn parse(xs: &[u8]) -> Result<ParseResult, String> {
+pub fn parse(xs: &[u8]) -> Result<ParseResult> {
     let nmea_sentence = parse_nmea_sentence(xs)?;
 
     if nmea_sentence.checksum == nmea_sentence.calc_checksum() {
@@ -758,6 +762,6 @@ pub fn parse(xs: &[u8]) -> Result<ParseResult, String> {
             }
         }
     } else {
-        Err("Checksum mismatch".into())
+        Err(ParseError::ChecksumFail)
     }
 }
